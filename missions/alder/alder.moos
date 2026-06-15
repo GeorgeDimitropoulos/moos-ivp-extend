@@ -1,48 +1,42 @@
-// Level 2 Configuration file: M. Benjamin
-
+// Alder mission file
 ServerHost = localhost
 ServerPort = 9000
-Simulator  = true
-
 Community  = alder
-
 MOOSTimeWarp = 1
 
 LatOrigin  = 43.825300 
 LongOrigin = -70.330400 
 
 //------------------------------------------
-// Antler configuration  block
+// Antler config block
 ProcessConfig = ANTLER
 {
   MSBetweenLaunches = 200
 
-  Run = MOOSDB		@ NewConsole = false
-  Run = uSimMarine	@ NewConsole = false
+  Run = MOOSDB        @ NewConsole = false
+  Run = uSimMarineV22	@ NewConsole = false
   Run = pNodeReporter	@ NewConsole = false
-  Run = pMarinePID	@ NewConsole = false
+  Run = pMarinePIDV22 @ NewConsole = false
   Run = pMarineViewer	@ NewConsole = false
-  Run = uProcessWatch   @ NewConsole = false
-  Run = pHelmIvP	@ NewConsole = false
-  Run = pOdometry	@ NewConsole = false
+  Run = uProcessWatch @ NewConsole = false
+  Run = pHelmIvP      @ NewConsole = false
+  //Run = pOdometry     @ NewConsole = false
 }
 
 //------------------------------------------
-// uSimMarine config block
+// uSimMarineV22 config block
 
-ProcessConfig = uSimMarine
+ProcessConfig = uSimMarineV22
 {
-  AppTick	= 10
+  AppTick	  = 10
   CommsTick	= 10
 
   START_X       = 0
   START_Y       = 0
   START_SPEED   = 0
   START_HEADING = 180
-
   PREFIX        = NAV
 }
-
 
 //------------------------------------------
 // uProcessWatch config block
@@ -52,16 +46,15 @@ ProcessConfig = uProcessWatch
   AppTick   = 4
   CommsTick = 4
 
-  term_report_interval = 0.8
-
   summary_wait = 5
 
   nowatch   = uXMS*
+  nowatch   = uMAC*
   nowatch   = uPokeDB*
+  nowatch   = uQueryDB*
   nowatch   = uTermCommand*
   watch_all = true
 }
-
 
 //------------------------------------------
 // pHelmIvP config block
@@ -76,17 +69,16 @@ ProcessConfig = pHelmIvP
   Domain     = course:0:359:360
   Domain     = speed:0:4:21
 
-  IVP_BEHAVIOR_DIR = ../../lib
-  //IVP_BEHAVIOR_DIR = /Users/mikerb/Research/moos-ivp-extend/trunk/lib
+  //IVP_BEHAVIOR_DIR = ../../lib
 
   ok_skew = any
   start_in_drive = false
 }
 
 //------------------------------------------
-// pMarinePID config block
+// pMarinePIDV22 config block
 
-ProcessConfig = pMarinePID
+ProcessConfig = pMarinePIDV22
 {
   AppTick    = 20
   CommsTick  = 20
@@ -153,7 +145,8 @@ ProcessConfig = pMarineViewer
 
 ProcessConfig = pNodeReporter
 {
-  AppTick	= 2
+  AppTick	  = 2
   CommsTick	= 2
-  VESSEL_TYPE   = KAYAK
+
+  vessel_type = kayak
 }
