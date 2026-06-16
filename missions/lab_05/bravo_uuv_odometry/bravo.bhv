@@ -1,0 +1,191 @@
+//--------    FILE: bravo.bhv   -------------
+
+initialize   DEPLOY = false
+initialize   RETURN = false
+initialize   LOITER_REGION = west
+initialize   SURFACE = false
+
+//----------------------------------------------
+Behavior = BHV_Loiter
+{
+  name      = bravo_loiter_west
+  pwt       = 100
+  condition = RETURN = false
+  condition = DEPLOY = true
+  condition = LOITER_REGION = west
+  condition = SURFACE = false
+  condition = ODOMETRY_DIST_AT_DEPTH < 200
+
+  perpetual = true
+  duration  = 150
+  duration_idle_decay = false
+
+  endflag   = LOITER_REGION = east
+
+  speed     = 2.5
+  clockwise = false
+
+  polygon   = radial:: x=100, y=-75, radius=30, pts=8
+
+  visual_hints = vertex_color=dodger_blue, edge_color=white
+  visual_hints = vertex_size=5, edge_size=1
+}
+
+//----------------------------------------------
+Behavior = BHV_ConstantDepth
+{
+  name      = depth_west
+  pwt       = 100
+  condition = RETURN = false
+  condition = DEPLOY = true
+  condition = LOITER_REGION = west
+  condition = SURFACE = false
+  condition = ODOMETRY_DIST_AT_DEPTH < 200
+
+  perpetual = true
+  duration  = no-time-limit
+
+  depth     = 30
+}
+
+//----------------------------------------------
+Behavior = BHV_Loiter
+{
+  name      = bravo_loiter_east
+  pwt       = 100
+  condition = RETURN = false
+  condition = DEPLOY = true
+  condition = LOITER_REGION = east
+  condition = SURFACE = false
+  condition = ODOMETRY_DIST_AT_DEPTH < 200
+
+  perpetual = true
+  duration  = 150
+  duration_idle_decay = false
+
+  endflag   = LOITER_REGION = west
+
+  speed     = 2.5
+  clockwise = false
+
+  updates = LOITER_EAST_UPDATE
+  polygon   = radial:: x=160, y=-50, radius=20, pts=8
+
+  visual_hints = vertex_color=orange, edge_color=white
+  visual_hints = vertex_size=5, edge_size=1
+}
+
+//----------------------------------------------
+Behavior = BHV_ConstantDepth
+{
+  name      = depth_east
+  pwt       = 100
+  condition = RETURN = false
+  condition = DEPLOY = true
+  condition = LOITER_REGION = east
+  condition = SURFACE = false
+  condition = ODOMETRY_DIST_AT_DEPTH < 200
+
+  perpetual = true
+  duration  = no-time-limit
+
+  depth     = 10
+}
+
+//----------------------------------------------
+Behavior = BHV_ConstantDepth
+{
+  name      = depth_return
+  pwt       = 100
+  condition = (RETURN = true) or (ODOMETRY_DIST_AT_DEPTH >= 200)
+  condition = DEPLOY = true
+
+  perpetual = true
+  duration  = no-time-limit
+
+  depth     = 0
+}
+
+//----------------------------------------------
+Behavior = BHV_Timer
+{
+  name      = timer_surface_interval
+  pwt       = 100
+  condition = DEPLOY = true
+  condition = RETURN = false
+  condition = SURFACE = false
+
+  perpetual = true
+  duration  = 200
+  duration_idle_decay = false
+
+  endflag   = SURFACE = true
+}
+
+//----------------------------------------------
+Behavior = BHV_ConstantDepth
+{
+  name      = depth_surface
+  pwt       = 100
+  condition = DEPLOY = true
+  condition = RETURN = false
+  condition = SURFACE = true
+
+  perpetual = true
+  duration  = no-time-limit
+
+  depth     = 0
+}
+
+//----------------------------------------------
+Behavior = BHV_ConstantSpeed
+{
+  name      = speed_surface
+  pwt       = 100
+  condition = DEPLOY = true
+  condition = RETURN = false
+  condition = SURFACE = true
+
+  perpetual = true
+  duration  = no-time-limit
+
+  speed     = 0
+}
+
+//----------------------------------------------
+Behavior = BHV_Timer
+{
+  name      = timer_surface_wait
+  pwt       = 100
+  condition = DEPLOY = true
+  condition = RETURN = false
+  condition = SURFACE = true
+  condition = NAV_DEPTH < 1
+
+  perpetual = true
+  duration  = 60
+  duration_idle_decay = false
+
+  endflag   = SURFACE = false
+}
+
+//----------------------------------------------
+Behavior = BHV_Waypoint
+{
+  name      = bravo_return
+  pwt       = 100
+  condition = (RETURN = true) or (ODOMETRY_DIST_AT_DEPTH >= 200)
+  condition = DEPLOY = true
+
+  perpetual = true
+  updates   = RETURN_UPDATE
+
+  endflag   = RETURN = false
+  endflag   = DEPLOY = false
+  endflag   = MISSION = complete
+
+           speed = 2.0
+  capture_radius = 5.0
+     slip_radius = 10.0
+          points = 0,0
+}
