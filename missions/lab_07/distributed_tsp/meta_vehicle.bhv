@@ -1,0 +1,207 @@
+//-----------------------------------------------
+// Helm Behavior file
+
+initialize   DEPLOY        = false
+initialize   RETURN        = false
+initialize   STATION_KEEP  = false
+initialize   LOITER        = false
+initialize   REFUEL_NEEDED = false
+initialize   REFUELING     = false
+
+//-----------------------------------------------
+// Mode declarations
+
+set MODE = ACTIVE {
+DEPLOY = true
+} INACTIVE
+
+set MODE = SURVEYING {
+MODE = ACTIVE
+LOITER = false
+RETURN = false
+STATION_KEEP = false
+REFUEL_NEEDED = false
+REFUELING = false
+}
+
+set MODE = REFUEL_RETURNING {
+MODE = ACTIVE
+REFUEL_NEEDED = true
+REFUELING = false
+DEPLOY = true
+}
+
+set MODE = REFUELING {
+MODE = ACTIVE
+REFUELING = true
+}
+
+set MODE = STATION_KEEPING {
+MODE = ACTIVE
+STATION_KEEP = true
+}
+
+set MODE = RETURNING {
+MODE = ACTIVE
+RETURN = true
+}
+
+set MODE = LOITERING {
+MODE = ACTIVE
+LOITER = true
+RETURN = false
+STATION_KEEP = false
+REFUEL_NEEDED = false
+REFUELING = false
+}
+
+//----------------------------------------------
+// Main loiter behavior
+
+
+
+//----------------------------------------------
+// Survey waypoint behavior.
+// pGenPath posts WPT_UPDATE with the generated waypoint list.
+
+Behavior = BHV_Waypoint
+{
+name      = waypt_survey
+pwt       = 100
+condition = MODE==SURVEYING
+updates   = WPT_UPDATE
+
+perpetual = true
+endflag   = RETURN = true
+
+speed       = 1.2
+radius      = 3.0
+slip_radius = 15.0
+points      = $(START_POS)
+
+visual_hints = nextpt_color=yellow, nextpt_lcolor=yellow
+visual_hints = edge_color=white, vertex_color=white
+visual_hints = edge_size=2, vertex_size=4
+}
+//----------------------------------------------
+// Auto-refuel timer.
+// Counts 600 seconds only while surveying.
+// When it finishes, the vehicle enters REFUEL_RETURNING mode.
+
+Behavior = BHV_Timer
+{
+name      = auto_refuel_timer
+pwt       = 50
+condition = MODE==SURVEYING
+
+duration  = 600
+perpetual = true
+duration_idle_decay = false
+
+endflag   = REFUEL_NEEDED = true
+}
+
+//----------------------------------------------
+// Return to launch point for refueling.
+
+Behavior = BHV_Waypoint
+{
+name      = waypt_refuel_return
+pwt       = 200
+condition = MODE==REFUEL_RETURNING
+
+endflag   = REFUELING = true
+endflag   = STATION_KEEP = false
+endflag   = RETURN = false
+
+perpetual = true
+
+speed     = 1.2
+radius    = 3.0
+nm_radius = 15.0
+points    = $(START_POS)
+lead      = 8
+}
+
+//----------------------------------------------
+// Refuel timer.
+// Once vehicle is in REFUELING mode, wait 60 seconds,
+// then resume surveying.
+
+Behavior = BHV_Timer
+{
+name      = refuel_timer
+pwt       = 300
+condition = MODE==REFUELING
+
+duration  = 60
+perpetual = false
+
+endflag   = REFUELING = false
+endflag   = REFUEL_NEEDED = false
+endflag   = RETURN = false
+endflag   = STATION_KEEP = false
+endflag   = LOITER = false
+endflag   = DEPLOY = true
+}
+
+//----------------------------------------------
+// Station keeping during refueling.
+
+Behavior = BHV_StationKeep
+{
+name      = refuel_station_keep
+pwt       = 250
+condition = MODE==REFUELING
+
+center_activate = true
+inner_radius    = 5
+outer_radius    = 10
+outer_speed     = 1.0
+transit_speed   = 1.2
+swing_time      = 7
+
+visual_hints = vertex_size=0, edge_color=gray50
+}
+
+//----------------------------------------------
+// Normal user-commanded return.
+// This should station-keep after return.
+
+Behavior = BHV_Waypoint
+{
+name      = waypt_return
+pwt       = 100
+condition = MODE==RETURNING
+
+endflag   = STATION_KEEP = true
+endflag   = LOITER = false
+
+perpetual = true
+
+speed     = 1.2
+radius    = 3.0
+nm_radius = 15.0
+points    = $(START_POS)
+lead      = 8
+}
+
+//----------------------------------------------
+// Normal station keeping.
+// User can still command this at any time.
+
+Behavior = BHV_StationKeep
+{
+name      = station_keep
+pwt       = 100
+condition = MODE==STATION_KEEPING
+
+center_activate = true
+inner_radius    = 5
+outer_radius    = 10
+outer_speed     = 1.0
+transit_speed   = 1.2
+swing_time      = 7
+
+visual_hints = vertex_size=0, edge_color=gray50
+}
