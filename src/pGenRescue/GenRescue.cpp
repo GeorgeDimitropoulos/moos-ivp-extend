@@ -341,11 +341,12 @@ void GenRescue::postShortestPath()
 
   string update_str = "points = " + m_path.get_spec_pts();
 
-  Notify("SURVEY_UPDATE", update_str);
-
-  m_paths_posted++;
-
-  reportEvent("SURVEY_UPDATE=" + update_str);
+  if(update_str != m_last_update_str) {
+    Notify("SURVEY_UPDATE", update_str);
+    m_last_update_str = update_str;
+    m_paths_posted++;
+    reportEvent("SURVEY_UPDATE=" + update_str);
+}
 }
 
 //---------------------------------------------------------
@@ -369,8 +370,11 @@ void GenRescue::postNullPath()
 
   string update_str = "points = " + segl.get_spec_pts();
 
-  Notify("SURVEY_UPDATE", update_str);
-  reportEvent("SURVEY_UPDATE=" + update_str);
+  if(update_str != m_last_update_str) {
+    Notify("SURVEY_UPDATE", update_str);
+    m_last_update_str = update_str;
+    reportEvent("SURVEY_UPDATE=" + update_str);
+}
 }
 
 //---------------------------------------------------------

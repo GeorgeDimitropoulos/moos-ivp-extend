@@ -62,6 +62,7 @@ class GenRescue : public AppCastingMOOSApp
   unsigned int m_total_alerts;
   unsigned int m_duplicate_alerts;
   unsigned int m_paths_posted;
+  std::string m_last_update_str;
 };
 
 #endif 
