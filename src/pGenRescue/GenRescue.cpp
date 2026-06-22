@@ -31,6 +31,14 @@ GenRescue::GenRescue()
   m_duplicate_alerts = 0;
   m_paths_posted = 0;
   m_last_path_repost_time = 0;
+
+  // Athens rescue field centroid and safety margin.
+  // The swimmer positions are random, but the field and buoys are fixed.
+  m_field_cx = -96.5;
+  m_field_cy = -19.5;
+  m_field_margin = 4.0;
+
+  initMap();
 }
 
 //---------------------------------------------------------
@@ -102,7 +110,9 @@ bool GenRescue::Iterate()
     Notify("DEPLOY", "true");
     Notify("RETURN", "false");
     Notify("STATION_KEEP", "false");
+
     postShortestPath();
+
     m_last_path_repost_time = now;
   }
 
@@ -285,6 +295,175 @@ double GenRescue::dist(double x1, double y1, double x2, double y2) const
   return(sqrt((dx * dx) + (dy * dy)));
 }
 
+
+//---------------------------------------------------------
+// Procedure: pointSegDist()
+
+double GenRescue::pointSegDist(double px, double py,
+                               double x1, double y1,
+                               double x2, double y2) const
+{
+  double vx = x2 - x1;
+  double vy = y2 - y1;
+  double wx = px - x1;
+  double wy = py - y1;
+
+  double len2 = (vx * vx) + (vy * vy);
+  if(len2 <= 0.0001)
+    return(dist(px, py, x1, y1));
+
+  double t = ((wx * vx) + (wy * vy)) / len2;
+
+  if(t < 0)
+    t = 0;
+  if(t > 1)
+    t = 1;
+
+  double cx = x1 + (t * vx);
+  double cy = y1 + (t * vy);
+
+  return(dist(px, py, cx, cy));
+}
+
+//---------------------------------------------------------
+// Procedure: initMap()
+
+void GenRescue::initMap()
+{
+  m_field_poly.clear();
+  m_obstacles.clear();
+
+  // Fixed Athens operating region from meta_vehicle.bhv:
+  // core_poly = pts={-215,-2:-76,-86:-16,6:-79,4}
+  m_field_poly.push_back(Point2D{-215, -2});
+  m_field_poly.push_back(Point2D{ -76,-86});
+  m_field_poly.push_back(Point2D{ -16,  6});
+  m_field_poly.push_back(Point2D{ -79,  4});
+
+  // Fixed Athens buoy obstacles from meta_vehicle.bhv.
+  // target_radius keeps generated waypoints out of the buoy polygon.
+  // segment_radius is only used as an ordering penalty. We do not
+  // insert detour points, so the planner stays adaptive.
+  m_obstacles.push_back(Obstacle{"buoy_1", -35.0,  -6.0, 5.0, 10.0});
+  m_obstacles.push_back(Obstacle{"buoy_2", -62.5, -17.9, 5.0, 10.0});
+  m_obstacles.push_back(Obstacle{"buoy_3", -95.0, -28.0, 5.0, 10.0});
+}
+
+//---------------------------------------------------------
+// Procedure: pointInField()
+
+bool GenRescue::pointInField(double x, double y) const
+{
+  bool inside = false;
+  unsigned int n = m_field_poly.size();
+
+  if(n < 3)
+    return(true);
+
+  for(unsigned int i = 0, j = n - 1; i < n; j = i++) {
+    double xi = m_field_poly[i].x;
+    double yi = m_field_poly[i].y;
+    double xj = m_field_poly[j].x;
+    double yj = m_field_poly[j].y;
+
+    bool intersect = ((yi > y) != (yj > y)) &&
+      (x < (xj - xi) * (y - yi) / ((yj - yi) + 0.000001) + xi);
+
+    if(intersect)
+      inside = !inside;
+  }
+
+  return(inside);
+}
+
+//---------------------------------------------------------
+// Procedure: fieldBoundaryDist()
+
+double GenRescue::fieldBoundaryDist(double x, double y) const
+{
+  if(m_field_poly.size() < 2)
+    return(9999);
+
+  double best = numeric_limits<double>::max();
+  unsigned int n = m_field_poly.size();
+
+  for(unsigned int i = 0; i < n; i++) {
+    unsigned int j = (i + 1) % n;
+
+    double x1 = m_field_poly[i].x;
+    double y1 = m_field_poly[i].y;
+    double x2 = m_field_poly[j].x;
+    double y2 = m_field_poly[j].y;
+
+    double d = pointSegDist(x, y, x1, y1, x2, y2);
+
+    if(d < best)
+      best = d;
+  }
+
+  return(best);
+}
+
+//---------------------------------------------------------
+// Procedure: pointIsSafe()
+
+bool GenRescue::pointIsSafe(double x, double y) const
+{
+  if(!pointInField(x, y))
+    return(false);
+
+  if(fieldBoundaryDist(x, y) < m_field_margin)
+    return(false);
+
+  for(unsigned int i = 0; i < m_obstacles.size(); i++) {
+    const Obstacle& obs = m_obstacles[i];
+
+    if(dist(x, y, obs.x, obs.y) < obs.target_radius)
+      return(false);
+  }
+
+  return(true);
+}
+
+//---------------------------------------------------------
+// Procedure: segmentIsSafe()
+// Used only to prefer safer next swimmers. We do not add relay
+// or detour points here because that made the path less adaptive.
+
+bool GenRescue::segmentIsSafe(double x1, double y1,
+                              double x2, double y2) const
+{
+  if(!pointIsSafe(x2, y2))
+    return(false);
+
+  // Sample along the segment to avoid ordering choices that cut
+  // outside the operation region.
+  for(unsigned int i = 1; i <= 20; i++) {
+    double t = (double)(i) / 20.0;
+    double x = x1 + t * (x2 - x1);
+    double y = y1 + t * (y2 - y1);
+
+    if(!pointInField(x, y))
+      return(false);
+
+    if(fieldBoundaryDist(x, y) < 1.0)
+      return(false);
+  }
+
+  // Penalize direct segments that cut through buoy buffers.
+  // BHV_AvoidObstacleV24 will still do local avoidance.
+  for(unsigned int i = 0; i < m_obstacles.size(); i++) {
+    const Obstacle& obs = m_obstacles[i];
+
+    double d = pointSegDist(obs.x, obs.y, x1, y1, x2, y2);
+
+    if(d < obs.segment_radius)
+      return(false);
+  }
+
+  return(true);
+}
+
 //---------------------------------------------------------
 // Procedure: getSafePoint()
 
@@ -293,13 +472,66 @@ void GenRescue::getSafePoint(double x, double y, double& sx, double& sy) const
   sx = x;
   sy = y;
 
-  // Keep rescue waypoints slightly inside the safe water region.
-  // The rescue manager allows a 3-5m rescue range, so we do not
-  // need to drive exactly onto swimmers that are close to boundaries.
-  if(sx < -194) sx = -194;
-  if(sx >  -70) sx =  -70;
-  if(sy <  -60) sy =  -60;
-  if(sy >   -4) sy =   -4;
+  // If the raw swimmer point is safely inside the field and away from
+  // buoys, use it directly. This preserves the adaptive path shape.
+  if(pointIsSafe(sx, sy))
+    return;
+
+  // Candidate 1: move up to 4m toward the field center.
+  // Rescue range is 3-5m, so this should usually still rescue.
+  double vx = m_field_cx - x;
+  double vy = m_field_cy - y;
+  double vd = sqrt((vx * vx) + (vy * vy));
+
+  if(vd > 0.001) {
+    double cx = x + 4.0 * vx / vd;
+    double cy = y + 4.0 * vy / vd;
+
+    if(pointIsSafe(cx, cy)) {
+      sx = cx;
+      sy = cy;
+      return;
+    }
+  }
+
+  // Candidate 2: search within rescue range around the swimmer.
+  // This handles random swimmers close to the boundary or near buoys.
+  double best_x = sx;
+  double best_y = sy;
+  double best_d = numeric_limits<double>::max();
+
+  const double pi_val = 3.14159265358979323846;
+
+  for(double rad = 1.0; rad <= 5.0; rad += 0.5) {
+    for(unsigned int k = 0; k < 72; k++) {
+      double ang = (2.0 * pi_val * (double)(k)) / 72.0;
+      double cx = x + rad * cos(ang);
+      double cy = y + rad * sin(ang);
+
+      if(!pointIsSafe(cx, cy))
+        continue;
+
+      double cd = dist(x, y, cx, cy);
+
+      if(cd < best_d) {
+        best_d = cd;
+        best_x = cx;
+        best_y = cy;
+      }
+    }
+  }
+
+  if(best_d < numeric_limits<double>::max()) {
+    sx = best_x;
+    sy = best_y;
+    return;
+  }
+
+  // Last fallback: use the point 4m toward center even if margin is tight.
+  if(vd > 0.001) {
+    sx = x + 4.0 * vx / vd;
+    sy = y + 4.0 * vy / vd;
+  }
 }
 
 //---------------------------------------------------------
@@ -331,6 +563,10 @@ void GenRescue::postShortestPath()
   double curr_x = m_nav_x;
   double curr_y = m_nav_y;
 
+  // Start the freshly posted path at Abe's current position.
+  // This makes each periodic update visibly adaptive.
+  segl.add_vertex(curr_x, curr_y);
+
   for(unsigned int step = 0; step < unvisited_count; step++) {
     double best_dist = numeric_limits<double>::max();
     int best_ix = -1;
@@ -346,6 +582,9 @@ void GenRescue::postShortestPath()
       getSafePoint(m_swimmers[i].x, m_swimmers[i].y, safe_x, safe_y);
 
       double d = dist(curr_x, curr_y, safe_x, safe_y);
+
+      if(!segmentIsSafe(curr_x, curr_y, safe_x, safe_y))
+        d += 500.0;
 
       if(d < best_dist) {
         best_dist = d;
@@ -380,9 +619,9 @@ void GenRescue::postShortestPath()
 
   Notify("VIEW_SEGLIST", m_path.get_spec());
 
+  Notify("DEPLOY", "true");
   Notify("RETURN", "false");
   Notify("STATION_KEEP", "false");
-  Notify("DEPLOY", "true");
 
   string update_str = "points = " + m_path.get_spec_pts();
 

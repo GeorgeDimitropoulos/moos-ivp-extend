@@ -20,6 +20,19 @@ struct Swimmer {
   bool found;
 };
 
+struct Point2D {
+  double x;
+  double y;
+};
+
+struct Obstacle {
+  std::string label;
+  double x;
+  double y;
+  double target_radius;
+  double segment_radius;
+};
+
 class GenRescue : public AppCastingMOOSApp
 {
  public:
@@ -46,6 +59,13 @@ class GenRescue : public AppCastingMOOSApp
   std::string parseID(std::string);
   int getSwimmerIndexByID(std::string) const;
   double dist(double, double, double, double) const;
+  double pointSegDist(double, double, double, double, double, double) const;
+
+  void initMap();
+  bool pointInField(double, double) const;
+  double fieldBoundaryDist(double, double) const;
+  bool pointIsSafe(double, double) const;
+  bool segmentIsSafe(double, double, double, double) const;
   void getSafePoint(double, double, double&, double&) const;
 
  private: // Config variables
@@ -53,12 +73,18 @@ class GenRescue : public AppCastingMOOSApp
   
  private: // State variables
   std::vector<Swimmer> m_swimmers;
+  std::vector<Point2D>  m_field_poly;
+  std::vector<Obstacle> m_obstacles;
 
   XYSegList  m_path;
   double     m_nav_x;
   double     m_nav_y;
   bool       m_nav_x_set;
   bool       m_nav_y_set;
+
+  double     m_field_cx;
+  double     m_field_cy;
+  double     m_field_margin;
 
   unsigned int m_total_alerts;
   unsigned int m_duplicate_alerts;
