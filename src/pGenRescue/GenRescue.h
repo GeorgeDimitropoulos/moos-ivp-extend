@@ -46,6 +46,7 @@ class GenRescue : public AppCastingMOOSApp
   std::string parseID(std::string);
   int getSwimmerIndexByID(std::string) const;
   double dist(double, double, double, double) const;
+  void getSafePoint(double, double, double&, double&) const;
 
  private: // Config variables
   std::string m_vname;
@@ -63,6 +64,7 @@ class GenRescue : public AppCastingMOOSApp
   unsigned int m_duplicate_alerts;
   unsigned int m_paths_posted;
   std::string m_last_update_str;
+  double m_last_path_repost_time;
 };
 
 #endif 

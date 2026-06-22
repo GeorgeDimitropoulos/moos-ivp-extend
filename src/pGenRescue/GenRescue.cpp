@@ -30,6 +30,7 @@ GenRescue::GenRescue()
   m_total_alerts = 0;
   m_duplicate_alerts = 0;
   m_paths_posted = 0;
+  m_last_path_repost_time = 0;
 }
 
 //---------------------------------------------------------
@@ -88,6 +89,22 @@ bool GenRescue::OnConnectToServer()
 bool GenRescue::Iterate()
 {
   AppCastingMOOSApp::Iterate();
+
+  unsigned int active = 0;
+  for(unsigned int i = 0; i < m_swimmers.size(); i++) {
+    if(!m_swimmers[i].found)
+      active++;
+  }
+
+  double now = MOOSTime();
+
+  if((active > 0) && ((now - m_last_path_repost_time) >= 5.0)) {
+    Notify("DEPLOY", "true");
+    Notify("RETURN", "false");
+    Notify("STATION_KEEP", "false");
+    postShortestPath();
+    m_last_path_repost_time = now;
+  }
 
   AppCastingMOOSApp::PostReport();
   return(true);
@@ -150,6 +167,7 @@ bool GenRescue::handleMailNewSwimmer(string str)
 
   if(ix >= 0) {
     m_duplicate_alerts++;
+    postShortestPath();
     return(true);
   }
 
@@ -268,6 +286,23 @@ double GenRescue::dist(double x1, double y1, double x2, double y2) const
 }
 
 //---------------------------------------------------------
+// Procedure: getSafePoint()
+
+void GenRescue::getSafePoint(double x, double y, double& sx, double& sy) const
+{
+  sx = x;
+  sy = y;
+
+  // Keep rescue waypoints slightly inside the safe water region.
+  // The rescue manager allows a 3-5m rescue range, so we do not
+  // need to drive exactly onto swimmers that are close to boundaries.
+  if(sx < -194) sx = -194;
+  if(sx >  -70) sx =  -70;
+  if(sy <  -60) sy =  -60;
+  if(sy >   -4) sy =   -4;
+}
+
+//---------------------------------------------------------
 // Procedure: postShortestPath()
 
 void GenRescue::postShortestPath()
@@ -307,7 +342,10 @@ void GenRescue::postShortestPath()
       if(m_swimmers[i].found)
         continue;
 
-      double d = dist(curr_x, curr_y, m_swimmers[i].x, m_swimmers[i].y);
+      double safe_x, safe_y;
+      getSafePoint(m_swimmers[i].x, m_swimmers[i].y, safe_x, safe_y);
+
+      double d = dist(curr_x, curr_y, safe_x, safe_y);
 
       if(d < best_dist) {
         best_dist = d;
@@ -318,11 +356,14 @@ void GenRescue::postShortestPath()
     if(best_ix < 0)
       break;
 
-    segl.add_vertex(m_swimmers[best_ix].x, m_swimmers[best_ix].y);
+    double safe_x, safe_y;
+    getSafePoint(m_swimmers[best_ix].x, m_swimmers[best_ix].y, safe_x, safe_y);
+
+    segl.add_vertex(safe_x, safe_y);
     used[best_ix] = true;
 
-    curr_x = m_swimmers[best_ix].x;
-    curr_y = m_swimmers[best_ix].y;
+    curr_x = safe_x;
+    curr_y = safe_y;
   }
 
   string label = "rescue_path";
@@ -339,14 +380,16 @@ void GenRescue::postShortestPath()
 
   Notify("VIEW_SEGLIST", m_path.get_spec());
 
+  Notify("RETURN", "false");
+  Notify("STATION_KEEP", "false");
+  Notify("DEPLOY", "true");
+
   string update_str = "points = " + m_path.get_spec_pts();
 
-  if(update_str != m_last_update_str) {
-    Notify("SURVEY_UPDATE", update_str);
-    m_last_update_str = update_str;
-    m_paths_posted++;
-    reportEvent("SURVEY_UPDATE=" + update_str);
-}
+  Notify("SURVEY_UPDATE", update_str);
+  m_last_update_str = update_str;
+  m_paths_posted++;
+  reportEvent("SURVEY_UPDATE=" + update_str);
 }
 
 //---------------------------------------------------------
