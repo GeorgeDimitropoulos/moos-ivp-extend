@@ -22,7 +22,7 @@ using namespace std;
 GenRescue::GenRescue()
 {
   m_vname = "";
-  m_planner_mode = "adversarial";
+  m_planner_mode = "cluster";
 
   m_nav_x = 0;
   m_nav_y = 0;
