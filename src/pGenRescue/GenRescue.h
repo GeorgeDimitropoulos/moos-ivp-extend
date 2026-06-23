@@ -107,6 +107,10 @@ class GenRescue : public AppCastingMOOSApp
   bool   m_nav_x_set;
   bool   m_nav_y_set;
 
+  double m_home_x;
+  double m_home_y;
+  bool   m_home_set;
+
   double m_field_cx;
   double m_field_cy;
   double m_field_margin;

@@ -29,6 +29,10 @@ GenRescue::GenRescue()
   m_nav_x_set = false;
   m_nav_y_set = false;
 
+  m_home_x = 0;
+  m_home_y = 0;
+  m_home_set = false;
+
   m_contact.name = "";
   m_contact.x = 0;
   m_contact.y = 0;
@@ -48,7 +52,7 @@ GenRescue::GenRescue()
   m_field_cy = -19.5;
 
   // Keep this small. A large margin can make boundary swimmers unreachable.
-  m_field_margin = 1.0;
+  m_field_margin = 4.0;
 
   initMap();
 }
@@ -83,11 +87,23 @@ bool GenRescue::OnNewMail(MOOSMSG_LIST &NewMail)
     else if(key == "NAV_X") {
       m_nav_x = msg.GetDouble();
       m_nav_x_set = true;
+
+      if(m_nav_x_set && m_nav_y_set && !m_home_set) {
+        m_home_x = m_nav_x;
+        m_home_y = m_nav_y;
+        m_home_set = true;
+      }
     }
 
     else if(key == "NAV_Y") {
       m_nav_y = msg.GetDouble();
       m_nav_y_set = true;
+
+      if(m_nav_x_set && m_nav_y_set && !m_home_set) {
+        m_home_x = m_nav_x;
+        m_home_y = m_nav_y;
+        m_home_set = true;
+      }
     }
 
     else if(key != "APPCAST_REQ")
@@ -655,7 +671,7 @@ bool GenRescue::segmentIsSafe(double x1, double y1,
     if(!pointInField(x, y))
       return(false);
 
-    if(fieldBoundaryDist(x, y) < 0.5)
+    if(fieldBoundaryDist(x, y) < m_field_margin)
       return(false);
   }
 
@@ -862,7 +878,7 @@ double GenRescue::candidateScore(unsigned int ix,
   bool segment_safe = segmentIsSafe(curr_x, curr_y, target_x, target_y);
 
   if(!segment_safe)
-    score += 120.0;
+    score += 5000.0;
 
   // Baseline comparison mode:
   // one-leg greedy, but still with safety penalties.
@@ -1016,14 +1032,29 @@ void GenRescue::postNullPath()
   if(!m_nav_x_set || !m_nav_y_set)
     return;
 
-  XYSegList segl;
-  segl.add_vertex(m_nav_x, m_nav_y);
+  double home_x = m_nav_x;
+  double home_y = m_nav_y;
 
-  string label = "rescue_path";
+  if(m_home_set) {
+    home_x = m_home_x;
+    home_y = m_home_y;
+  }
+
+  double safe_home_x, safe_home_y;
+  getSafePoint(home_x, home_y, safe_home_x, safe_home_y);
+
+  XYSegList segl;
+  segl.add_vertex(safe_home_x, safe_home_y);
+
+  string label = "rescue_home_path";
   if(m_vname != "")
     label += "_" + m_vname;
 
   segl.set_label(label);
+  segl.set_color("edge", "orange");
+  segl.set_color("vertex", "orange");
+  segl.set_param("edge_size", "2");
+  segl.set_param("vertex_size", "5");
 
   Notify("VIEW_SEGLIST", segl.get_spec());
 
@@ -1031,9 +1062,12 @@ void GenRescue::postNullPath()
 
   Notify("SURVEY_UPDATE", update_str);
   m_last_update_str = update_str;
-  reportEvent("SURVEY_UPDATE=" + update_str);
+  reportEvent("Final home SURVEY_UPDATE=" + update_str);
 
-  Notify("RETURN", "true");
+  // Return home using the survey behavior, not waypoint_return.
+  // waypoint_return may leave the active rescue OpRegion.
+  Notify("RETURN", "false");
+  Notify("DEPLOY", "true");
   Notify("STATION_KEEP", "false");
 }
 
