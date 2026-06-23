@@ -56,7 +56,7 @@ bool GenRescue::OnNewMail(MOOSMSG_LIST &NewMail)
 
     bool handled = true;
 
-    if(key == "SWIMMER_ALERT") 
+    if((key == "SWIMMER_ALERT") || (key.find("SWIMMER_ALERT_") == 0))
       handled = handleMailNewSwimmer(sval);
 
     else if((key == "FOUND_SWIMMER") || (key == "RESCUED_SWIMMER")) 
@@ -241,6 +241,9 @@ bool GenRescue::parseSwimmerAlert(string str, Swimmer& swimmer)
   string x_str  = tokStringParse(str, "x", ',', '=');
   string y_str  = tokStringParse(str, "y", ',', '=');
   string id_str = tokStringParse(str, "id", ',', '=');
+
+  if(id_str == "")
+    id_str = tokStringParse(str, "name", ',', '=');
 
   x_str  = stripBlankEnds(x_str);
   y_str  = stripBlankEnds(y_str);
@@ -652,11 +655,14 @@ void GenRescue::postNullPath()
 
   string update_str = "points = " + segl.get_spec_pts();
 
-  if(update_str != m_last_update_str) {
-    Notify("SURVEY_UPDATE", update_str);
-    m_last_update_str = update_str;
-    reportEvent("SURVEY_UPDATE=" + update_str);
-}
+  Notify("SURVEY_UPDATE", update_str);
+  m_last_update_str = update_str;
+  reportEvent("SURVEY_UPDATE=" + update_str);
+
+  // Lab 12 edge case: if all swimmers have been rescued or removed,
+  // immediately let the return behavior take over.
+  Notify("RETURN", "true");
+  Notify("STATION_KEEP", "false");
 }
 
 //---------------------------------------------------------
