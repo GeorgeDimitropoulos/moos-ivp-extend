@@ -20,13 +20,22 @@ struct Swimmer {
   bool found;
 };
 
+struct ContactInfo {
+  std::string name;
+  double x;
+  double y;
+  double heading;
+  double speed;
+  bool set;
+};
+
 struct Point2D {
   double x;
   double y;
 };
 
 struct Obstacle {
-  std::string label;
+  std::string name;
   double x;
   double y;
   double target_radius;
@@ -46,20 +55,28 @@ class GenRescue : public AppCastingMOOSApp
   bool OnStartUp();
   bool buildReport();
   void RegisterVariables();
-  
+
  protected:
   bool handleMailNewSwimmer(std::string);
   bool handleMailFoundSwimmer(std::string);
+  bool handleMailNodeReport(std::string);
   bool handleMailRescueRegion(std::string);
+  bool parseRescueRegion(std::string);
+  void updateFieldCentroid();
 
   void postShortestPath();
   void postNullPath();
 
   bool parseSwimmerAlert(std::string, Swimmer&);
   std::string parseID(std::string);
+  bool parseNodeReport(std::string, ContactInfo&) const;
+
   int getSwimmerIndexByID(std::string) const;
+
   double dist(double, double, double, double) const;
   double pointSegDist(double, double, double, double, double, double) const;
+  double bearingTo(double, double, double, double) const;
+  double angleDiff(double, double) const;
 
   void initMap();
   bool pointInField(double, double) const;
@@ -68,29 +85,39 @@ class GenRescue : public AppCastingMOOSApp
   bool segmentIsSafe(double, double, double, double) const;
   void getSafePoint(double, double, double&, double&) const;
 
- private: // Config variables
+  double nearestActiveNeighborDist(unsigned int, const std::vector<bool>&) const;
+  unsigned int countNearbyActive(unsigned int, const std::vector<bool>&, double) const;
+  unsigned int opponentRank(unsigned int, const std::vector<bool>&) const;
+  double candidateScore(unsigned int, double, double, const std::vector<bool>&) const;
+
+ private:
   std::string m_vname;
-  
- private: // State variables
+  std::string m_planner_mode;
+
   std::vector<Swimmer> m_swimmers;
-  std::vector<Point2D>  m_field_poly;
+  std::vector<Point2D> m_field_poly;
   std::vector<Obstacle> m_obstacles;
 
-  XYSegList  m_path;
-  double     m_nav_x;
-  double     m_nav_y;
-  bool       m_nav_x_set;
-  bool       m_nav_y_set;
+  ContactInfo m_contact;
 
-  double     m_field_cx;
-  double     m_field_cy;
-  double     m_field_margin;
+  XYSegList  m_path;
+
+  double m_nav_x;
+  double m_nav_y;
+  bool   m_nav_x_set;
+  bool   m_nav_y_set;
+
+  double m_field_cx;
+  double m_field_cy;
+  double m_field_margin;
 
   unsigned int m_total_alerts;
   unsigned int m_duplicate_alerts;
   unsigned int m_paths_posted;
+  unsigned int m_node_reports;
+
   std::string m_last_update_str;
-  double m_last_path_repost_time;
+  double      m_last_path_repost_time;
 };
 
-#endif 
+#endif

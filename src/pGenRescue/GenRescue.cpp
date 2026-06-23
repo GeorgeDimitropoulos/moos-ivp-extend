@@ -6,6 +6,7 @@
 /************************************************************/
 
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <sstream>
 #include "GenRescue.h"
@@ -21,22 +22,33 @@ using namespace std;
 GenRescue::GenRescue()
 {
   m_vname = "";
+  m_planner_mode = "adversarial";
 
   m_nav_x = 0;
   m_nav_y = 0;
   m_nav_x_set = false;
   m_nav_y_set = false;
 
+  m_contact.name = "";
+  m_contact.x = 0;
+  m_contact.y = 0;
+  m_contact.heading = 0;
+  m_contact.speed = 0;
+  m_contact.set = false;
+
   m_total_alerts = 0;
   m_duplicate_alerts = 0;
   m_paths_posted = 0;
+  m_node_reports = 0;
   m_last_path_repost_time = 0;
 
-  // Athens rescue field centroid and safety margin.
-  // The swimmer positions are random, but the field and buoys are fixed.
+  // Approximate Athens field center. Used only to pull unsafe swimmer
+  // targets inward by a few meters.
   m_field_cx = -96.5;
   m_field_cy = -19.5;
-  m_field_margin = 4.0;
+
+  // Keep this small. A large margin can make boundary swimmers unreachable.
+  m_field_margin = 1.0;
 
   initMap();
 }
@@ -59,8 +71,14 @@ bool GenRescue::OnNewMail(MOOSMSG_LIST &NewMail)
     if((key == "SWIMMER_ALERT") || (key.find("SWIMMER_ALERT_") == 0))
       handled = handleMailNewSwimmer(sval);
 
-    else if((key == "FOUND_SWIMMER") || (key == "RESCUED_SWIMMER")) 
+    else if((key == "FOUND_SWIMMER") || (key == "RESCUED_SWIMMER"))
       handled = handleMailFoundSwimmer(sval);
+
+    else if(key == "NODE_REPORT")
+      handled = handleMailNodeReport(sval);
+
+    else if(key == "RESCUE_REGION")
+      handled = handleMailRescueRegion(sval);
 
     else if(key == "NAV_X") {
       m_nav_x = msg.GetDouble();
@@ -74,14 +92,14 @@ bool GenRescue::OnNewMail(MOOSMSG_LIST &NewMail)
 
     else if(key != "APPCAST_REQ")
       handled = false;
-    
+
     if(!handled)
       reportRunWarning("Unhandled Mail: " + key + "=" + sval);
   }
 
   return(true);
 }
- 
+
 //---------------------------------------------------------
 // Procedure: OnConnectToServer()
 
@@ -125,11 +143,11 @@ bool GenRescue::Iterate()
 
 bool GenRescue::OnStartUp()
 {
-  AppCastingMOOSApp::OnStartUp(); 
+  AppCastingMOOSApp::OnStartUp();
 
   STRING_LIST sParams;
   m_MissionReader.GetConfiguration(GetAppName(), sParams);
-  
+
   STRING_LIST::iterator p;
   for(p = sParams.begin(); p != sParams.end(); p++) {
     string sLine  = *p;
@@ -138,9 +156,11 @@ bool GenRescue::OnStartUp()
 
     if(param == "vname")
       m_vname = value;
+    else if(param == "planner_mode")
+      m_planner_mode = tolower(value);
   }
 
-  RegisterVariables();	
+  RegisterVariables();
   return(true);
 }
 
@@ -152,8 +172,17 @@ void GenRescue::RegisterVariables()
   AppCastingMOOSApp::RegisterVariables();
 
   Register("SWIMMER_ALERT", 0);
+  Register("SWIMMER_ALERT_ABE", 0);
+  Register("SWIMMER_ALERT_BEN", 0);
+  Register("SWIMMER_ALERT_ASHA", 0);
+  Register("SWIMMER_ALERT_BRAVO", 0);
+
   Register("FOUND_SWIMMER", 0);
   Register("RESCUED_SWIMMER", 0);
+
+  Register("NODE_REPORT", 0);
+  Register("RESCUE_REGION", 0);
+
   Register("NAV_X", 0);
   Register("NAV_Y", 0);
 }
@@ -216,9 +245,33 @@ bool GenRescue::handleMailFoundSwimmer(string str)
 
   m_swimmers[ix].found = true;
 
-  reportEvent("Marked swimmer found: id=" + id);
+  reportEvent("Dropped swimmer from plan: id=" + id + ", msg=" + str);
 
   postShortestPath();
+
+  return(true);
+}
+
+//---------------------------------------------------------
+// Procedure: handleMailNodeReport()
+
+bool GenRescue::handleMailNodeReport(string str)
+{
+  ContactInfo contact;
+  bool ok = parseNodeReport(str, contact);
+
+  if(!ok)
+    return(true);
+
+  if(contact.name == "")
+    return(true);
+
+  if((m_vname != "") && (contact.name == m_vname))
+    return(true);
+
+  m_contact = contact;
+  m_contact.set = true;
+  m_node_reports++;
 
   return(true);
 }
@@ -228,13 +281,98 @@ bool GenRescue::handleMailFoundSwimmer(string str)
 
 bool GenRescue::handleMailRescueRegion(string str)
 {
+  bool ok = parseRescueRegion(str);
+
+  if(ok)
+    reportEvent("Updated dynamic RESCUE_REGION with " +
+                intToString((int)(m_field_poly.size())) + " vertices.");
+  else
+    reportRunWarning("Could not parse RESCUE_REGION: " + str);
+
   return(true);
 }
 
 //---------------------------------------------------------
+// Procedure: parseRescueRegion()
+// Expected examples:
+//   pts={-215,-2:-76,-86:-16,6:-79,4}
+//   label=...,pts={-215,-2:-76,-86:-16,6:-79,4},...
+
+bool GenRescue::parseRescueRegion(string str)
+{
+  string pts = str;
+
+  size_t p0 = pts.find("pts={");
+  if(p0 != string::npos) {
+    p0 += 5;
+    size_t p1 = pts.find("}", p0);
+    if(p1 == string::npos)
+      return(false);
+    pts = pts.substr(p0, p1 - p0);
+  }
+  else {
+    size_t b0 = pts.find("{");
+    size_t b1 = pts.find("}");
+    if((b0 != string::npos) && (b1 != string::npos) && (b1 > b0))
+      pts = pts.substr(b0 + 1, b1 - b0 - 1);
+  }
+
+  vector<Point2D> new_poly;
+
+  while(pts != "") {
+    string pair = biteStringX(pts, ':');
+    pair = stripBlankEnds(pair);
+
+    if(pair == "")
+      continue;
+
+    string x_str = biteStringX(pair, ',');
+    string y_str = pair;
+
+    x_str = stripBlankEnds(x_str);
+    y_str = stripBlankEnds(y_str);
+
+    if(!isNumber(x_str) || !isNumber(y_str))
+      return(false);
+
+    Point2D point;
+    point.x = atof(x_str.c_str());
+    point.y = atof(y_str.c_str());
+    new_poly.push_back(point);
+  }
+
+  if(new_poly.size() < 3)
+    return(false);
+
+  m_field_poly = new_poly;
+  updateFieldCentroid();
+
+  return(true);
+}
+
+//---------------------------------------------------------
+// Procedure: updateFieldCentroid()
+
+void GenRescue::updateFieldCentroid()
+{
+  if(m_field_poly.size() == 0)
+    return;
+
+  double sx = 0;
+  double sy = 0;
+
+  for(unsigned int i = 0; i < m_field_poly.size(); i++) {
+    sx += m_field_poly[i].x;
+    sy += m_field_poly[i].y;
+  }
+
+  m_field_cx = sx / (double)(m_field_poly.size());
+  m_field_cy = sy / (double)(m_field_poly.size());
+}
+
+
+//---------------------------------------------------------
 // Procedure: parseSwimmerAlert()
-// Example:
-//   x=-142, y=-10, id=56
 
 bool GenRescue::parseSwimmerAlert(string str, Swimmer& swimmer)
 {
@@ -265,14 +403,54 @@ bool GenRescue::parseSwimmerAlert(string str, Swimmer& swimmer)
 
 //---------------------------------------------------------
 // Procedure: parseID()
-// Example:
-//   id=48, finder=abe
 
 string GenRescue::parseID(string str)
 {
   string id = tokStringParse(str, "id", ',', '=');
   id = stripBlankEnds(id);
   return(id);
+}
+
+//---------------------------------------------------------
+// Procedure: parseNodeReport()
+
+bool GenRescue::parseNodeReport(string str, ContactInfo& contact) const
+{
+  string name_str = tokStringParse(str, "NAME", ',', '=');
+  string x_str    = tokStringParse(str, "X", ',', '=');
+  string y_str    = tokStringParse(str, "Y", ',', '=');
+  string hdg_str  = tokStringParse(str, "HDG", ',', '=');
+  string spd_str  = tokStringParse(str, "SPD", ',', '=');
+
+  name_str = stripBlankEnds(name_str);
+  x_str    = stripBlankEnds(x_str);
+  y_str    = stripBlankEnds(y_str);
+  hdg_str  = stripBlankEnds(hdg_str);
+  spd_str  = stripBlankEnds(spd_str);
+
+  if((name_str == "") || (x_str == "") || (y_str == ""))
+    return(false);
+
+  if(!isNumber(x_str) || !isNumber(y_str))
+    return(false);
+
+  contact.name = name_str;
+  contact.x = atof(x_str.c_str());
+  contact.y = atof(y_str.c_str());
+
+  if(isNumber(hdg_str))
+    contact.heading = atof(hdg_str.c_str());
+  else
+    contact.heading = 0;
+
+  if(isNumber(spd_str))
+    contact.speed = atof(spd_str.c_str());
+  else
+    contact.speed = 0;
+
+  contact.set = true;
+
+  return(true);
 }
 
 //---------------------------------------------------------
@@ -298,7 +476,6 @@ double GenRescue::dist(double x1, double y1, double x2, double y2) const
   return(sqrt((dx * dx) + (dy * dy)));
 }
 
-
 //---------------------------------------------------------
 // Procedure: pointSegDist()
 
@@ -312,6 +489,7 @@ double GenRescue::pointSegDist(double px, double py,
   double wy = py - y1;
 
   double len2 = (vx * vx) + (vy * vy);
+
   if(len2 <= 0.0001)
     return(dist(px, py, x1, y1));
 
@@ -329,6 +507,39 @@ double GenRescue::pointSegDist(double px, double py,
 }
 
 //---------------------------------------------------------
+// Procedure: bearingTo()
+// Compass bearing: 0 north, 90 east.
+
+double GenRescue::bearingTo(double x1, double y1, double x2, double y2) const
+{
+  double dx = x2 - x1;
+  double dy = y2 - y1;
+
+  double ang = atan2(dx, dy) * 180.0 / 3.14159265358979323846;
+
+  if(ang < 0)
+    ang += 360.0;
+
+  return(ang);
+}
+
+//---------------------------------------------------------
+// Procedure: angleDiff()
+
+double GenRescue::angleDiff(double a1, double a2) const
+{
+  double diff = fabs(a1 - a2);
+
+  while(diff > 360.0)
+    diff -= 360.0;
+
+  if(diff > 180.0)
+    diff = 360.0 - diff;
+
+  return(diff);
+}
+
+//---------------------------------------------------------
 // Procedure: initMap()
 
 void GenRescue::initMap()
@@ -336,17 +547,17 @@ void GenRescue::initMap()
   m_field_poly.clear();
   m_obstacles.clear();
 
-  // Fixed Athens operating region from meta_vehicle.bhv:
+  // Fixed Athens core region from meta_vehicle.bhv:
   // core_poly = pts={-215,-2:-76,-86:-16,6:-79,4}
   m_field_poly.push_back(Point2D{-215, -2});
   m_field_poly.push_back(Point2D{ -76,-86});
   m_field_poly.push_back(Point2D{ -16,  6});
   m_field_poly.push_back(Point2D{ -79,  4});
 
-  // Fixed Athens buoy obstacles from meta_vehicle.bhv.
-  // target_radius keeps generated waypoints out of the buoy polygon.
-  // segment_radius is only used as an ordering penalty. We do not
-  // insert detour points, so the planner stays adaptive.
+  // Fixed Athens buoy obstacles.
+  // target_radius avoids posting an actual waypoint inside/near a buoy.
+  // segment_radius is only a scoring penalty; the helm still performs
+  // local obstacle avoidance.
   m_obstacles.push_back(Obstacle{"buoy_1", -35.0,  -6.0, 5.0, 10.0});
   m_obstacles.push_back(Obstacle{"buoy_2", -62.5, -17.9, 5.0, 10.0});
   m_obstacles.push_back(Obstacle{"buoy_3", -95.0, -28.0, 5.0, 10.0});
@@ -393,12 +604,9 @@ double GenRescue::fieldBoundaryDist(double x, double y) const
   for(unsigned int i = 0; i < n; i++) {
     unsigned int j = (i + 1) % n;
 
-    double x1 = m_field_poly[i].x;
-    double y1 = m_field_poly[i].y;
-    double x2 = m_field_poly[j].x;
-    double y2 = m_field_poly[j].y;
-
-    double d = pointSegDist(x, y, x1, y1, x2, y2);
+    double d = pointSegDist(x, y,
+                            m_field_poly[i].x, m_field_poly[i].y,
+                            m_field_poly[j].x, m_field_poly[j].y);
 
     if(d < best)
       best = d;
@@ -430,8 +638,8 @@ bool GenRescue::pointIsSafe(double x, double y) const
 
 //---------------------------------------------------------
 // Procedure: segmentIsSafe()
-// Used only to prefer safer next swimmers. We do not add relay
-// or detour points here because that made the path less adaptive.
+// Used as a scoring penalty, not as a hard routing system.
+// Do not add detour points here: local obstacle avoidance handles that.
 
 bool GenRescue::segmentIsSafe(double x1, double y1,
                               double x2, double y2) const
@@ -439,8 +647,6 @@ bool GenRescue::segmentIsSafe(double x1, double y1,
   if(!pointIsSafe(x2, y2))
     return(false);
 
-  // Sample along the segment to avoid ordering choices that cut
-  // outside the operation region.
   for(unsigned int i = 1; i <= 20; i++) {
     double t = (double)(i) / 20.0;
     double x = x1 + t * (x2 - x1);
@@ -449,12 +655,10 @@ bool GenRescue::segmentIsSafe(double x1, double y1,
     if(!pointInField(x, y))
       return(false);
 
-    if(fieldBoundaryDist(x, y) < 1.0)
+    if(fieldBoundaryDist(x, y) < 0.5)
       return(false);
   }
 
-  // Penalize direct segments that cut through buoy buffers.
-  // BHV_AvoidObstacleV24 will still do local avoidance.
   for(unsigned int i = 0; i < m_obstacles.size(); i++) {
     const Obstacle& obs = m_obstacles[i];
 
@@ -475,17 +679,14 @@ void GenRescue::getSafePoint(double x, double y, double& sx, double& sy) const
   sx = x;
   sy = y;
 
-  // If the raw swimmer point is safely inside the field and away from
-  // buoys, use it directly. This preserves the adaptive path shape.
   if(pointIsSafe(sx, sy))
     return;
 
-  // Candidate 1: move up to 4m toward the field center.
-  // Rescue range is 3-5m, so this should usually still rescue.
   double vx = m_field_cx - x;
   double vy = m_field_cy - y;
   double vd = sqrt((vx * vx) + (vy * vy));
 
+  // Try moving toward center, while staying within rescue range.
   if(vd > 0.001) {
     double cx = x + 4.0 * vx / vd;
     double cy = y + 4.0 * vy / vd;
@@ -497,8 +698,7 @@ void GenRescue::getSafePoint(double x, double y, double& sx, double& sy) const
     }
   }
 
-  // Candidate 2: search within rescue range around the swimmer.
-  // This handles random swimmers close to the boundary or near buoys.
+  // Search within approximately rescue distance around the swimmer.
   double best_x = sx;
   double best_y = sy;
   double best_d = numeric_limits<double>::max();
@@ -530,11 +730,190 @@ void GenRescue::getSafePoint(double x, double y, double& sx, double& sy) const
     return;
   }
 
-  // Last fallback: use the point 4m toward center even if margin is tight.
+  // Final fallback. May be tight, but usually avoids the worst cases.
   if(vd > 0.001) {
     sx = x + 4.0 * vx / vd;
     sy = y + 4.0 * vy / vd;
   }
+}
+
+//---------------------------------------------------------
+// Procedure: nearestActiveNeighborDist()
+// Uses safe points so the lookahead matches the real posted path.
+
+double GenRescue::nearestActiveNeighborDist(unsigned int ix,
+                                            const vector<bool>& used) const
+{
+  double sx1, sy1;
+  getSafePoint(m_swimmers[ix].x, m_swimmers[ix].y, sx1, sy1);
+
+  double best = numeric_limits<double>::max();
+
+  for(unsigned int j = 0; j < m_swimmers.size(); j++) {
+    if(j == ix)
+      continue;
+
+    if(j < used.size() && used[j])
+      continue;
+
+    if(m_swimmers[j].found)
+      continue;
+
+    double sx2, sy2;
+    getSafePoint(m_swimmers[j].x, m_swimmers[j].y, sx2, sy2);
+
+    double d = dist(sx1, sy1, sx2, sy2);
+
+    if(d < best)
+      best = d;
+  }
+
+  if(best == numeric_limits<double>::max())
+    return(0);
+
+  return(best);
+}
+
+//---------------------------------------------------------
+// Procedure: countNearbyActive()
+
+unsigned int GenRescue::countNearbyActive(unsigned int ix,
+                                          const vector<bool>& used,
+                                          double radius) const
+{
+  unsigned int count = 0;
+
+  for(unsigned int j = 0; j < m_swimmers.size(); j++) {
+    if(j == ix)
+      continue;
+
+    if(j < used.size() && used[j])
+      continue;
+
+    if(m_swimmers[j].found)
+      continue;
+
+    double d = dist(m_swimmers[ix].x, m_swimmers[ix].y,
+                    m_swimmers[j].x, m_swimmers[j].y);
+
+    if(d <= radius)
+      count++;
+  }
+
+  return(count);
+}
+
+//---------------------------------------------------------
+// Procedure: opponentRank()
+
+unsigned int GenRescue::opponentRank(unsigned int ix,
+                                     const vector<bool>& used) const
+{
+  if(!m_contact.set)
+    return(999);
+
+  unsigned int rank = 1;
+
+  double candidate_dist = dist(m_contact.x, m_contact.y,
+                               m_swimmers[ix].x, m_swimmers[ix].y);
+
+  for(unsigned int j = 0; j < m_swimmers.size(); j++) {
+    if(j == ix)
+      continue;
+
+    if(j < used.size() && used[j])
+      continue;
+
+    if(m_swimmers[j].found)
+      continue;
+
+    double d = dist(m_contact.x, m_contact.y,
+                    m_swimmers[j].x, m_swimmers[j].y);
+
+    if(d < candidate_dist)
+      rank++;
+  }
+
+  return(rank);
+}
+
+//---------------------------------------------------------
+// Procedure: candidateScore()
+// Lower is better.
+// Combines safe travel distance, cluster lookahead, segment safety,
+// and opponent-aware concession.
+
+double GenRescue::candidateScore(unsigned int ix,
+                                 double curr_x,
+                                 double curr_y,
+                                 const vector<bool>& used) const
+{
+  double target_x, target_y;
+  getSafePoint(m_swimmers[ix].x, m_swimmers[ix].y, target_x, target_y);
+
+  double self_dist = dist(curr_x, curr_y, target_x, target_y);
+  double next_dist = nearestActiveNeighborDist(ix, used);
+
+  unsigned int cluster_count = countNearbyActive(ix, used, 20.0);
+
+  double score = self_dist + (0.65 * next_dist);
+
+  score -= 4.0 * (double)(cluster_count);
+  bool segment_safe = segmentIsSafe(curr_x, curr_y, target_x, target_y);
+
+  if(!segment_safe)
+    score += 120.0;
+
+  // Baseline comparison mode:
+  // one-leg greedy, but still with safety penalties.
+  if((m_planner_mode == "greedy") || (m_planner_mode == "baseline")) {
+    double greedy_score = self_dist;
+
+    if(!segment_safe)
+      greedy_score += 500.0;
+
+    return(greedy_score);
+  }
+
+  // Cluster-only comparison mode:
+  // use two-leg lookahead and safety, but no opponent penalties.
+  if(m_planner_mode == "cluster")
+    return(score);
+
+  if(m_contact.set) {
+    double opp_dist = dist(m_contact.x, m_contact.y,
+                           m_swimmers[ix].x, m_swimmers[ix].y);
+
+    unsigned int rank = opponentRank(ix, used);
+
+    if(opp_dist + 5.0 < self_dist)
+      score += 15.0 + (0.25 * (self_dist - opp_dist));
+
+    if(rank == 1)
+      score += 20.0;
+    else if(rank == 2)
+      score += 5.0;
+
+    if(opp_dist < 15.0)
+      score += 15.0;
+    else if(opp_dist < 25.0)
+      score += 5.0;
+
+    double brg = bearingTo(m_contact.x, m_contact.y,
+                           m_swimmers[ix].x, m_swimmers[ix].y);
+
+    double hdiff = angleDiff(m_contact.heading, brg);
+
+    if((opp_dist < 40.0) && (hdiff < 45.0)) {
+      double factor = (45.0 - hdiff) / 45.0;
+      score += 10.0 * factor;
+    }
+
+    if(self_dist + 8.0 < opp_dist)
+      score -= 25.0;
+  }
+
+  return(score);
 }
 
 //---------------------------------------------------------
@@ -566,12 +945,12 @@ void GenRescue::postShortestPath()
   double curr_x = m_nav_x;
   double curr_y = m_nav_y;
 
-  // Start the freshly posted path at Abe's current position.
-  // This makes each periodic update visibly adaptive.
-  segl.add_vertex(curr_x, curr_y);
+  // Do not add current vehicle position as a survey waypoint.
+  // Planning still starts from curr_x/curr_y, but the posted waypoint
+  // list contains only rescue targets inside the active region.
 
   for(unsigned int step = 0; step < unvisited_count; step++) {
-    double best_dist = numeric_limits<double>::max();
+    double best_score = numeric_limits<double>::max();
     int best_ix = -1;
 
     for(unsigned int i = 0; i < m_swimmers.size(); i++) {
@@ -581,16 +960,10 @@ void GenRescue::postShortestPath()
       if(m_swimmers[i].found)
         continue;
 
-      double safe_x, safe_y;
-      getSafePoint(m_swimmers[i].x, m_swimmers[i].y, safe_x, safe_y);
+      double score = candidateScore(i, curr_x, curr_y, used);
 
-      double d = dist(curr_x, curr_y, safe_x, safe_y);
-
-      if(!segmentIsSafe(curr_x, curr_y, safe_x, safe_y))
-        d += 500.0;
-
-      if(d < best_dist) {
-        best_dist = d;
+      if(score < best_score) {
+        best_score = score;
         best_ix = (int)(i);
       }
     }
@@ -599,7 +972,8 @@ void GenRescue::postShortestPath()
       break;
 
     double safe_x, safe_y;
-    getSafePoint(m_swimmers[best_ix].x, m_swimmers[best_ix].y, safe_x, safe_y);
+    getSafePoint(m_swimmers[best_ix].x, m_swimmers[best_ix].y,
+                 safe_x, safe_y);
 
     segl.add_vertex(safe_x, safe_y);
     used[best_ix] = true;
@@ -659,8 +1033,6 @@ void GenRescue::postNullPath()
   m_last_update_str = update_str;
   reportEvent("SURVEY_UPDATE=" + update_str);
 
-  // Lab 12 edge case: if all swimmers have been rescued or removed,
-  // immediately let the return behavior take over.
   Notify("RETURN", "true");
   Notify("STATION_KEEP", "false");
 }
@@ -670,9 +1042,10 @@ void GenRescue::postNullPath()
 
 bool GenRescue::buildReport()
 {
-  m_msgs << "pGenRescue swimmer-driven planner" << endl;
-  m_msgs << "---------------------------------" << endl;
+  m_msgs << "pGenRescue safe adversarial cluster planner" << endl;
+  m_msgs << "------------------------------------------" << endl;
   m_msgs << "Vehicle name: " << m_vname << endl;
+  m_msgs << "Planner mode: " << m_planner_mode << endl;
   m_msgs << "NAV_X/Y set:  " << boolToString(m_nav_x_set && m_nav_y_set) << endl;
   m_msgs << "NAV_X:        " << doubleToStringX(m_nav_x, 2) << endl;
   m_msgs << "NAV_Y:        " << doubleToStringX(m_nav_y, 2) << endl;
@@ -682,6 +1055,21 @@ bool GenRescue::buildReport()
   m_msgs << "Duplicate alerts:      " << m_duplicate_alerts << endl;
   m_msgs << "Known swimmers:        " << m_swimmers.size() << endl;
   m_msgs << "Paths posted:          " << m_paths_posted << endl;
+  m_msgs << "Node reports:          " << m_node_reports << endl;
+  m_msgs << endl;
+
+  if(m_contact.set) {
+    m_msgs << "Adversary:             " << m_contact.name << endl;
+    m_msgs << "Adv X/Y:               "
+           << doubleToStringX(m_contact.x, 1) << ", "
+           << doubleToStringX(m_contact.y, 1) << endl;
+    m_msgs << "Adv heading/speed:     "
+           << doubleToStringX(m_contact.heading, 1) << " / "
+           << doubleToStringX(m_contact.speed, 2) << endl;
+  } else {
+    m_msgs << "Adversary:             none yet" << endl;
+  }
+
   m_msgs << endl;
 
   unsigned int active = 0;
@@ -698,12 +1086,27 @@ bool GenRescue::buildReport()
   m_msgs << "Found swimmers:        " << found << endl;
   m_msgs << endl;
 
+  vector<bool> used;
+  used.resize(m_swimmers.size(), false);
+
   for(unsigned int i = 0; i < m_swimmers.size(); i++) {
+    double safe_x, safe_y;
+    getSafePoint(m_swimmers[i].x, m_swimmers[i].y, safe_x, safe_y);
+
     m_msgs << "  id=" << m_swimmers[i].id
-           << ", x=" << doubleToStringX(m_swimmers[i].x, 1)
-           << ", y=" << doubleToStringX(m_swimmers[i].y, 1)
-           << ", found=" << boolToString(m_swimmers[i].found)
-           << endl;
+           << ", raw=(" << doubleToStringX(m_swimmers[i].x, 1)
+           << "," << doubleToStringX(m_swimmers[i].y, 1) << ")"
+           << ", safe=(" << doubleToStringX(safe_x, 1)
+           << "," << doubleToStringX(safe_y, 1) << ")"
+           << ", found=" << boolToString(m_swimmers[i].found);
+
+    if(!m_swimmers[i].found && m_nav_x_set && m_nav_y_set)
+      m_msgs << ", score=" << doubleToStringX(candidateScore(i, m_nav_x, m_nav_y, used), 1);
+
+    if(m_contact.set && !m_swimmers[i].found)
+      m_msgs << ", opp_rank=" << opponentRank(i, used);
+
+    m_msgs << endl;
   }
 
   return(true);
