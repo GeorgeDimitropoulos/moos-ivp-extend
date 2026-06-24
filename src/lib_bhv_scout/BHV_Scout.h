@@ -1,29 +1,10 @@
-/*****************************************************************/
-/*    NAME: M.Benjamin,                                          */
-/*    ORGN: Dept of Mechanical Eng / CSAIL, MIT Cambridge MA     */
-/*    FILE: BHV_Scout.h                                          */
-/*    DATE: April 30th 2022                                      */
-/*                                                               */
-/* This program is free software; you can redistribute it and/or */
-/* modify it under the terms of the GNU General Public License   */
-/* as published by the Free Software Foundation; either version  */
-/* 2 of the License, or (at your option) any later version.      */
-/*                                                               */
-/* This program is distributed in the hope that it will be       */
-/* useful, but WITHOUT ANY WARRANTY; without even the implied    */
-/* warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR       */
-/* PURPOSE. See the GNU General Public License for more details. */
-/*                                                               */
-/* You should have received a copy of the GNU General Public     */
-/* License along with this program; if not, write to the Free    */
-/* Software Foundation, Inc., 59 Temple Place - Suite 330,       */
-/* Boston, MA 02111-1307, USA.                                   */
-/*****************************************************************/
- 
 #ifndef BHV_SCOUT_HEADER
 #define BHV_SCOUT_HEADER
 
 #include <string>
+#include <vector>
+#include <utility>
+
 #include "IvPBehavior.h"
 #include "XYPoint.h"
 #include "XYPolygon.h"
@@ -33,17 +14,30 @@ public:
   BHV_Scout(IvPDomain);
   ~BHV_Scout() {};
   
-  bool         setParam(std::string, std::string);
-  void         onIdleState();
+  bool          setParam(std::string, std::string);
+  void          onIdleState();
   IvPFunction* onRunState();
-  void         onEveryState(std::string);
+  void          onEveryState(std::string);
   
 protected:
   IvPFunction* buildFunction();
   void         updateScoutPoint();
   void         postViewPoint(bool viewable=true);
 
-protected: // State variables
+  bool         generateSweepPoints();
+  bool         pointInRegion(double x, double y) const;
+
+  bool         parseSwimmerAlert(std::string report,
+                                 std::string& id,
+                                 double& x,
+                                 double& y) const;
+  bool         addKnownSwimmer(std::string id, double x, double y);
+  void         handleNodeReport(std::string report);
+  double       candidatePointScore(double x, double y,
+                                   unsigned int order_offset) const;
+  void         chooseBestSweepPoint();
+
+protected:
   double   m_osx;
   double   m_osy;
   double   m_curr_time;
@@ -54,9 +48,23 @@ protected: // State variables
 
   XYPolygon m_rescue_region;
 
-protected: // Config variables
+  std::vector<std::pair<double,double> > m_sweep_points;
+  unsigned int m_sweep_ix;
+  bool     m_sweep_ready;
+
+  std::vector<std::string> m_known_ids;
+  std::vector<std::pair<double,double> > m_known_swimmers;
+
+  double   m_tmate_x;
+  double   m_tmate_y;
+  bool     m_tmate_set;
+
+protected:
   double m_capture_radius;
   double m_desired_speed;
+  double m_sweep_spacing;
+  double m_known_avoid_radius;
+  double m_tmate_avoid_radius;
 
   std::string m_tmate;
 };
@@ -66,4 +74,5 @@ extern "C" {
   IVP_EXPORT_FUNCTION IvPBehavior * createBehavior(std::string name, IvPDomain domain) 
   {return new BHV_Scout(domain);}
 }
+
 #endif
