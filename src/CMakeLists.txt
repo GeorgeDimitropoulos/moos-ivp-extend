@@ -27,3 +27,4 @@ ADD_SUBDIRECTORY(pGenRescue)
 #                           END of CMakeLists.txt
 ##############################################################################
 
+ADD_SUBDIRECTORY(lib_bhv_scout)
